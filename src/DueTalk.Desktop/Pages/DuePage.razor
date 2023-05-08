@@ -1,0 +1,259 @@
+﻿@page "/due"
+@using System.Text.RegularExpressions
+@using System.ComponentModel.DataAnnotations
+@using DueTalk.Core;
+@using GHIElectronics.TinyCLR.DUE;
+@inject DueServices service
+@inject ISnackbar Snackbar
+<h3>DUE Generator with Open AI GPT</h3>
+<MudGrid>
+    <MudItem xs="12" sm="7">
+        <MudPaper Class="pa-4">
+            <MudForm @ref="form">
+                <MudTextField T="string" Label="Prompt to Generate Code" Lines="5"  @bind-Value="InputPrompt" Required="true" RequiredError="please type what code do you want to generate!" />
+                <MudSelect T="ExecuteMode" @bind-Value="Mode" Label="Execute On" AnchorOrigin="Origin.BottomCenter">
+                    <MudSelectItem Value="@(ExecuteMode.Web)" />
+                    <MudSelectItem Value="@(ExecuteMode.Device)" />
+                
+                </MudSelect>
+            </MudForm>
+        </MudPaper>
+        <MudPaper Class="pa-4 mt-4">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" DisableElevation="true" OnClick="Submit">Submit</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary" DisableElevation="true" OnClick="Reset" Class="mx-2">Reset</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Info" DisableElevation="true" OnClick="ledOn_Click" Class="mx-2" Style="display:none;">LED ON</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Warning" hidden DisableElevation="true" OnClick="ledOff_Click" Class="mx-2" Style="display:none;">LED OFF</MudButton>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" sm="5">
+        <MudPaper Class="pa-4 mud-height-full">
+            <MudText Typo="Typo.subtitle2">@($"Results ({results.Count})")</MudText>
+                @foreach (var result in results)
+            {
+                <MudText Color="@Color.Success">@result</MudText>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+<MudGrid>
+    <MudItem xs="12" sm="12">
+        <MudPaper Class="pa-4">
+            <MudTable Items="interactions" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@Loading" LoadingProgressColor="Color.Info">
+                <HeaderContent>
+                    <MudTh>Prompt</MudTh>
+                    <MudTh>Generated Code</MudTh>
+                    <MudTh>Action</MudTh>
+                
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Prompt">@context.command</MudTd>
+                    <MudTd DataLabel="Generated Code">
+                        <MudTextField T="string" ReadOnly="false" Label="Multiline" Variant="Variant.Text" @bind-Text="@context.code" Lines="4" />
+                    </MudTd>
+                    <MudTd DataLabel="Action">
+                          <MudButton Variant="Variant.Filled" Color="Color.Primary" DisableElevation="true" OnClick="()=>ExecuteCode(context.code)">Execute</MudButton>
+                          <MudButton Variant="Variant.Filled" Color="Color.Success" DisableElevation="true" OnClick="()=>LoadCode(context.code)">Load</MudButton>
+                    </MudTd>
+                 
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+<MudGrid>
+    <MudItem xs="12" sm="12">
+        <MudPaper Class="pa-4">
+            <h5>Web Result</h5>
+            <MudTextField T="string" Label="Multiline" Variant="Variant.Text" Text="@ExecutedCodeResult" Lines="8" />
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+@code {
+    string ExecutedCodeResult;
+    ExecuteMode Mode = ExecuteMode.Device;
+    bool Loading = false;
+    string InputPrompt = "Create 100 random number, and show in display ";
+    bool success;
+    List<string> results = new();
+    List<Interaction> interactions;
+    CodexEngine engine;
+    ScriptEngine script;
+    StringConsole webConsole;
+    MudForm form;
+
+    public enum ExecuteMode
+    {
+        Web, Device
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        script = new ScriptEngine(typeof(ExtensionLibrary));
+        webConsole = new StringConsole();
+        ExtensionLibrary.Print += (a, teks) =>
+        {
+            webConsole.Print(teks);
+        };
+        script.SetConsole(webConsole);
+
+        engine = new CodexEngine();
+        interactions = new List<Interaction>();
+    }
+
+    void ledOn_Click()
+    {
+        var port = DUEController.GetConnectionPort();
+
+        var dev = new DUEController(port);
+
+        dev.Digital.Write((int)DUEController.Pin.Led, true);
+
+        dev.Disconnect();
+    }
+
+    void ledOff_Click()
+    {
+        var port = DUEController.GetConnectionPort();
+
+        var dev = new DUEController(port);
+
+        dev.Digital.Write((int)DUEController.Pin.Led, false);
+
+        dev.Disconnect();
+    }
+    async Task<bool> ExecuteCode(string command)
+    {
+        Loading = true;
+        if(Mode  == ExecuteMode.Device)
+        {
+            var port = DUEController.GetConnectionPort();
+
+            var dev = new DUEController(port);
+
+            var res = dev.Script.Execute(command);
+
+            dev.Disconnect();
+
+            Loading = false;
+
+            if (res)
+            {
+                Snackbar.Add("Code has been executed successfully", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Code failed to execute", Severity.Error);
+            }
+
+            return res;
+        }
+        else
+        {
+            try
+            {
+
+                script.Run(command);
+                ExecutedCodeResult = webConsole.GetContent();
+                Snackbar.Add("Code has been loaded successfully", Severity.Success);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Code failed to load: {ex}", Severity.Error);
+                Console.WriteLine(ex);
+            }
+            finally
+            {
+                Loading = false;
+            }
+
+            return false;
+        }
+
+    }
+
+    async Task<bool> LoadCode(string command)
+    {
+        Loading = true;
+        if (Mode == ExecuteMode.Device)
+        {
+            var port = DUEController.GetConnectionPort();
+
+            var dev = new DUEController(port);
+
+            var res = false;
+            if (dev.Script.IsRunning())
+            {
+                res = dev.Script.New();
+            }
+
+            res = dev.Script.Load(command);
+
+            dev.Disconnect();
+
+            Loading = false;
+
+            if (res)
+            {
+                Snackbar.Add("Code has been loaded successfully", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Code failed to load", Severity.Error);
+            }
+
+            return res;
+        }
+        else
+        {
+            try
+            {
+                script.Reset();
+                script.Run(command);
+                ExecutedCodeResult = webConsole.GetContent();
+                Snackbar.Add("Code has been loaded successfully", Severity.Success);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Code failed to load: {ex}", Severity.Error);
+                Console.WriteLine(ex);
+            }
+            finally
+            {
+                Loading = false;
+            }
+
+            return false;
+        }
+    }
+    async Task Reset()
+    {
+        form.Reset();
+        results.Clear();
+        interactions.Clear();
+        webConsole.Cls();
+        
+    }
+    async Task Submit()
+    {
+        Loading = true;
+        await Task.Delay(1);
+        StateHasChanged();
+        var res = string.Empty;
+        //var result = await engine.getCompletion(InputPrompt);
+        var message = await service.GenerateCode(InputPrompt);
+        if (!string.IsNullOrEmpty(message))
+        {
+            interactions.Add(new Interaction() { command = InputPrompt, code = message });
+            res = $"[{DateTime.Now}] - Code Generated";
+        }
+        else
+        {
+            res = $"[{DateTime.Now}] - Code Fail to Generate";            
+        }
+        results.Add(res);
+        Loading = false;
+    }
+
+}
